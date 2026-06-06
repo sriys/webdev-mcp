@@ -891,6 +891,76 @@ async def webdev_osmo_get_resources() -> str:
 # Entry point
 # ---------------------------------------------------------------------------
 
+def build_app() -> "Starlette":
+    """Build the combined Starlette app with OAuth + MCP routes."""
+    import os
+    import secrets
+    import time
+    from starlette.applications import Starlette
+    from starlette.requests import Request
+    from starlette.responses import JSONResponse, RedirectResponse
+    from starlette.routing import Mount, Route
+    from starlette.middleware import Middleware
+    from starlette.middleware.cors import CORSMiddleware
+
+    # Simple in-memory token store (personal server — no real auth needed)
+    _tokens: dict[str, float] = {}
+
+    def _base_url(request: Request) -> str:
+        return str(request.base_url).rstrip("/")
+
+    async def oauth_metadata(request: Request) -> JSONResponse:
+        base = _base_url(request)
+        return JSONResponse({
+            "issuer": base,
+            "authorization_endpoint": f"{base}/authorize",
+            "token_endpoint": f"{base}/token",
+            "response_types_supported": ["code"],
+            "grant_types_supported": ["authorization_code"],
+            "code_challenge_methods_supported": ["S256"],
+        })
+
+    async def authorize(request: Request) -> RedirectResponse:
+        """Immediately issue a code — no real login required for personal use."""
+        params = dict(request.query_params)
+        redirect_uri = params.get("redirect_uri", "")
+        state = params.get("state", "")
+        code = secrets.token_urlsafe(24)
+        sep = "&" if "?" in redirect_uri else "?"
+        location = f"{redirect_uri}{sep}code={code}&state={state}"
+        return RedirectResponse(location, status_code=302)
+
+    async def token(request: Request) -> JSONResponse:
+        """Issue a bearer token — no real verification for personal use."""
+        tok = secrets.token_urlsafe(32)
+        _tokens[tok] = time.time() + 3600 * 24 * 365  # valid 1 year
+        return JSONResponse({
+            "access_token": tok,
+            "token_type": "bearer",
+            "expires_in": 3600 * 24 * 365,
+        })
+
+    mcp_app = mcp.streamable_http_app()
+
+    routes = [
+        Route("/.well-known/oauth-authorization-server", oauth_metadata),
+        Route("/authorize", authorize),
+        Route("/token", token, methods=["POST"]),
+        Mount("/", app=mcp_app),
+    ]
+
+    middleware = [
+        Middleware(
+            CORSMiddleware,
+            allow_origins=["*"],
+            allow_methods=["*"],
+            allow_headers=["*"],
+        )
+    ]
+
+    return Starlette(routes=routes, middleware=middleware)
+
+
 if __name__ == "__main__":
     import argparse
     import os
@@ -898,16 +968,14 @@ if __name__ == "__main__":
 
     parser = argparse.ArgumentParser(description="Web Dev Tools MCP Server")
     parser.add_argument("--http", action="store_true", help="Run as HTTP server (remote MCP)")
-    parser.add_argument("--port", type=int, default=None, help="HTTP port (overrides PORT env var, default: 7771)")
-    parser.add_argument("--host", type=str, default=None, help="Host to bind (default: 127.0.0.1 locally, 0.0.0.0 on Render)")
+    parser.add_argument("--port", type=int, default=None, help="HTTP port (default: 7771)")
+    parser.add_argument("--host", type=str, default=None, help="Host to bind")
     args = parser.parse_args()
 
     if args.http:
-        # Render sets $PORT; fall back to 7771 for local dev
         port = args.port or int(os.environ.get("PORT", 7771))
-        # Bind to all interfaces on Render (PORT env present), localhost otherwise
         host = args.host or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
-        app = mcp.streamable_http_app()
+        app = build_app()
         uvicorn.run(app, host=host, port=port)
     else:
         mcp.run()
