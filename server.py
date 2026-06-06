@@ -900,6 +900,15 @@ from starlette.requests import Request as _Request
 from starlette.responses import JSONResponse as _JSONResponse, RedirectResponse as _RedirectResponse
 
 
+@mcp.custom_route("/", methods=["GET"])
+async def root(request: _Request) -> _JSONResponse:
+    return _JSONResponse({
+        "name": "webdev-tools",
+        "description": "MCP server for GSAP, React, R3F, Lenis, Barba.js, Spline, Osmo Supply",
+        "mcp_endpoint": "/mcp",
+    })
+
+
 @mcp.custom_route("/.well-known/oauth-authorization-server", methods=["GET"])
 async def oauth_metadata(request: _Request) -> _JSONResponse:
     base = str(request.base_url).rstrip("/")
