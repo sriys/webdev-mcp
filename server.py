@@ -891,75 +891,53 @@ async def webdev_osmo_get_resources() -> str:
 # Entry point
 # ---------------------------------------------------------------------------
 
-def build_app() -> "Starlette":
-    """Build the combined Starlette app with OAuth + MCP routes."""
-    import os
-    import secrets
-    import time
-    from starlette.applications import Starlette
-    from starlette.requests import Request
-    from starlette.responses import JSONResponse, RedirectResponse
-    from starlette.routing import Mount, Route
-    from starlette.middleware import Middleware
-    from starlette.middleware.cors import CORSMiddleware
+# ---------------------------------------------------------------------------
+# OAuth routes — added directly onto the MCP app so its lifespan is preserved
+# ---------------------------------------------------------------------------
+import secrets as _secrets
+import time as _time
+from starlette.requests import Request as _Request
+from starlette.responses import JSONResponse as _JSONResponse, RedirectResponse as _RedirectResponse
 
-    # Simple in-memory token store (personal server — no real auth needed)
-    _tokens: dict[str, float] = {}
 
-    def _base_url(request: Request) -> str:
-        return str(request.base_url).rstrip("/")
+@mcp.custom_route("/.well-known/oauth-authorization-server", methods=["GET"])
+async def oauth_metadata(request: _Request) -> _JSONResponse:
+    base = str(request.base_url).rstrip("/")
+    return _JSONResponse({
+        "issuer": base,
+        "authorization_endpoint": f"{base}/authorize",
+        "token_endpoint": f"{base}/token",
+        "response_types_supported": ["code"],
+        "grant_types_supported": ["authorization_code"],
+        "code_challenge_methods_supported": ["S256"],
+    })
 
-    async def oauth_metadata(request: Request) -> JSONResponse:
-        base = _base_url(request)
-        return JSONResponse({
-            "issuer": base,
-            "authorization_endpoint": f"{base}/authorize",
-            "token_endpoint": f"{base}/token",
-            "response_types_supported": ["code"],
-            "grant_types_supported": ["authorization_code"],
-            "code_challenge_methods_supported": ["S256"],
-        })
 
-    async def authorize(request: Request) -> RedirectResponse:
-        """Immediately issue a code — no real login required for personal use."""
-        params = dict(request.query_params)
-        redirect_uri = params.get("redirect_uri", "")
-        state = params.get("state", "")
-        code = secrets.token_urlsafe(24)
-        sep = "&" if "?" in redirect_uri else "?"
-        location = f"{redirect_uri}{sep}code={code}&state={state}"
-        return RedirectResponse(location, status_code=302)
+@mcp.custom_route("/authorize", methods=["GET"])
+async def authorize(request: _Request) -> _RedirectResponse:
+    """Immediately grant a code — no real login needed for a personal server."""
+    params = dict(request.query_params)
+    redirect_uri = params.get("redirect_uri", "")
+    state = params.get("state", "")
+    code = _secrets.token_urlsafe(24)
+    sep = "&" if "?" in redirect_uri else "?"
+    return _RedirectResponse(f"{redirect_uri}{sep}code={code}&state={state}", status_code=302)
 
-    async def token(request: Request) -> JSONResponse:
-        """Issue a bearer token — no real verification for personal use."""
-        tok = secrets.token_urlsafe(32)
-        _tokens[tok] = time.time() + 3600 * 24 * 365  # valid 1 year
-        return JSONResponse({
-            "access_token": tok,
-            "token_type": "bearer",
-            "expires_in": 3600 * 24 * 365,
-        })
 
-    mcp_app = mcp.streamable_http_app()
+@mcp.custom_route("/token", methods=["POST"])
+async def token(request: _Request) -> _JSONResponse:
+    """Issue a long-lived bearer token — no verification needed for personal use."""
+    tok = _secrets.token_urlsafe(32)
+    return _JSONResponse({
+        "access_token": tok,
+        "token_type": "bearer",
+        "expires_in": 3600 * 24 * 365,
+    })
 
-    routes = [
-        Route("/.well-known/oauth-authorization-server", oauth_metadata),
-        Route("/authorize", authorize),
-        Route("/token", token, methods=["POST"]),
-        Mount("/", app=mcp_app),
-    ]
 
-    middleware = [
-        Middleware(
-            CORSMiddleware,
-            allow_origins=["*"],
-            allow_methods=["*"],
-            allow_headers=["*"],
-        )
-    ]
-
-    return Starlette(routes=routes, middleware=middleware)
-
+# ---------------------------------------------------------------------------
+# Entry point
+# ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
     import argparse
@@ -975,7 +953,7 @@ if __name__ == "__main__":
     if args.http:
         port = args.port or int(os.environ.get("PORT", 7771))
         host = args.host or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
-        app = build_app()
+        app = mcp.streamable_http_app()
         uvicorn.run(app, host=host, port=port)
     else:
         mcp.run()
