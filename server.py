@@ -916,10 +916,28 @@ async def oauth_metadata(request: _Request) -> _JSONResponse:
         "issuer": base,
         "authorization_endpoint": f"{base}/authorize",
         "token_endpoint": f"{base}/token",
+        "registration_endpoint": f"{base}/register",
         "response_types_supported": ["code"],
         "grant_types_supported": ["authorization_code"],
         "code_challenge_methods_supported": ["S256"],
     })
+
+
+@mcp.custom_route("/register", methods=["POST"])
+async def register(request: _Request) -> _JSONResponse:
+    """Dynamic client registration (RFC 7591) — accepts any client."""
+    body = await request.json()
+    client_id = _secrets.token_urlsafe(16)
+    client_secret = _secrets.token_urlsafe(32)
+    return _JSONResponse({
+        "client_id": client_id,
+        "client_secret": client_secret,
+        "client_name": body.get("client_name", "claude"),
+        "redirect_uris": body.get("redirect_uris", []),
+        "grant_types": ["authorization_code"],
+        "response_types": ["code"],
+        "token_endpoint_auth_method": "client_secret_post",
+    }, status_code=201)
 
 
 @mcp.custom_route("/authorize", methods=["GET"])
